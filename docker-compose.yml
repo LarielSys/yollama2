@@ -1,0 +1,73 @@
+services:
+  ollama:
+    image: ollama/ollama
+    container_name: yollama-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_NUM_PARALLEL=4
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_FLASH_ATTENTION=1
+      - OLLAMA_MAX_LOADED_MODELS=4
+      - NVIDIA_VISIBLE_DEVICES=all
+    restart: unless-stopped
+    networks:
+      - yollama-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  yolo:
+    build:
+      context: ./yolo-service
+      dockerfile: Dockerfile
+    container_name: yollama-yolo
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./data/input:/app/input
+    restart: unless-stopped
+    networks:
+      - yollama-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: yollama-app
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data/input:/app/input
+      - ./data/output:/app/output
+    environment:
+      - YOLO_SERVICE_URL=http://yolo:8001
+      - OLLAMA_SERVICE_URL=http://ollama:11434
+      - OLLAMA_MODEL=qwen2.5vl
+    depends_on:
+      - ollama
+      - yolo
+    restart: unless-stopped
+    networks:
+      - yollama-net
+
+volumes:
+  ollama_models:
+
+networks:
+  yollama-net:
+    driver: bridge

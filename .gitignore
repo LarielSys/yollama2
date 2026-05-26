@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+data/output/*
+!data/output/.gitkeep
+data/input/*
+!data/input/.gitkeep
+*.egg-info/
+.venv/
+
+# Large model weights
+*.pt
+*.pth
+*.onnx
+*.weights
+
+# Image sorter masters/output (large image sets)
+image-sorter/masters/
+image-sorter/output/
+image-sorter/test_clip.py
+
+# Build logs
+build.log

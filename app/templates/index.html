@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YOLLama Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #242735;
+    --border: #2e3144;
+    --text: #e4e4e7;
+    --text2: #9ca3af;
+    --accent: #6366f1;
+    --accent2: #818cf8;
+    --green: #22c55e;
+    --yellow: #eab308;
+    --red: #ef4444;
+    --orange: #f97316;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 1rem 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 {
+    font-size: 1.4rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  header h1 span { font-weight: 400; opacity: .7; -webkit-text-fill-color: var(--text2); }
+  .health-bar { display: flex; gap: .75rem; }
+  .health-dot {
+    display: flex; align-items: center; gap: .35rem;
+    font-size: .78rem; color: var(--text2);
+  }
+  .health-dot .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--text2);
+  }
+  .health-dot .dot.ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .health-dot .dot.err { background: var(--red); box-shadow: 0 0 6px var(--red); }
+
+  .container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.25rem;
+  }
+  .card h2 {
+    font-size: 1rem; font-weight: 600;
+    margin-bottom: 1rem; color: var(--text);
+  }
+
+  /* Upload area */
+  .drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 10px;
+    padding: 2.5rem 1rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all .2s;
+    position: relative;
+  }
+  .drop-zone:hover, .drop-zone.dragover {
+    border-color: var(--accent);
+    background: rgba(99,102,241,.06);
+  }
+  .drop-zone input { display: none; }
+  .drop-zone .icon { font-size: 2.5rem; margin-bottom: .5rem; }
+  .drop-zone p { color: var(--text2); font-size: .85rem; }
+  .drop-zone .filename {
+    margin-top: .5rem;
+    color: var(--accent2);
+    font-size: .82rem;
+    word-break: break-all;
+  }
+
+  .preview-img {
+    max-width: 100%;
+    max-height: 220px;
+    border-radius: 8px;
+    margin-top: .75rem;
+    display: none;
+  }
+
+  .controls { display: flex; gap: .75rem; margin-top: 1rem; flex-wrap: wrap; align-items: center; }
+  .controls label { font-size: .8rem; color: var(--text2); }
+  .controls input[type=range] { width: 120px; accent-color: var(--accent); }
+
+  .btn {
+    padding: .6rem 1.4rem;
+    border: none;
+    border-radius: 8px;
+    font-size: .85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+  }
+  .btn-primary:hover { background: var(--accent2); }
+  .btn-primary:disabled {
+    opacity: .5; cursor: not-allowed;
+  }
+
+  /* Progress */
+  .progress-wrap {
+    margin-top: 1rem;
+    display: none;
+  }
+  .progress-wrap.active { display: block; }
+  .progress-bar {
+    height: 4px;
+    background: var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .progress-bar .fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 4px;
+    transition: width .3s;
+  }
+  .progress-status {
+    font-size: .78rem;
+    color: var(--text2);
+    margin-top: .4rem;
+  }
+
+  /* Results */
+  .result-section { display: none; }
+  .result-section.visible { display: block; }
+
+  .summary-box {
+    background: var(--surface2);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    font-size: .88rem;
+    line-height: 1.5;
+  }
+
+  .objects-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .82rem;
+  }
+  .objects-table th {
+    text-align: left;
+    padding: .5rem .6rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--text2);
+    font-weight: 500;
+  }
+  .objects-table td {
+    padding: .5rem .6rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .severity {
+    display: inline-block;
+    padding: .15rem .5rem;
+    border-radius: 4px;
+    font-size: .75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+  .severity-none { background: #1f2937; color: #9ca3af; }
+  .severity-low { background: #052e16; color: #4ade80; }
+  .severity-medium { background: #422006; color: #fbbf24; }
+  .severity-high { background: #431407; color: #fb923c; }
+  .severity-critical { background: #450a0a; color: #f87171; }
+  .severity-unknown { background: #1e1b4b; color: #a5b4fc; }
+
+  .recommendation-box {
+    background: var(--surface2);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 8px 8px 0;
+    padding: 1rem;
+    margin-top: 1rem;
+    font-size: .85rem;
+    color: var(--text2);
+  }
+
+  .meta-row {
+    display: flex;
+    gap: 1.5rem;
+    font-size: .75rem;
+    color: var(--text2);
+    margin-bottom: .75rem;
+    flex-wrap: wrap;
+  }
+  .meta-row span { display: flex; align-items: center; gap: .3rem; }
+
+  /* History panel */
+  .history-list {
+    list-style: none;
+    max-height: 350px;
+    overflow-y: auto;
+  }
+  .history-list li {
+    padding: .55rem .6rem;
+    border-bottom: 1px solid var(--border);
+    font-size: .8rem;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    transition: background .15s;
+  }
+  .history-list li:hover { background: var(--surface2); }
+  .history-list .h-name { color: var(--text); }
+  .history-list .h-size { color: var(--text2); font-size: .72rem; }
+
+  .empty-state {
+    text-align: center;
+    padding: 2rem;
+    color: var(--text2);
+    font-size: .85rem;
+  }
+
+  /* JSON viewer */
+  .json-toggle {
+    margin-top: 1rem;
+    font-size: .78rem;
+    color: var(--accent2);
+    cursor: pointer;
+    user-select: none;
+  }
+  .json-viewer {
+    display: none;
+    margin-top: .5rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    overflow-x: auto;
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
+    font-size: .75rem;
+    max-height: 400px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .json-viewer.open { display: block; }
+
+  .conf-bar-wrap {
+    width: 60px; height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    display: inline-block;
+    vertical-align: middle;
+    margin-left: .4rem;
+  }
+  .conf-bar {
+    height: 100%;
+    border-radius: 3px;
+    background: var(--green);
+  }
+
+  /* YOLO boxes card */
+  .annotated-wrap {
+    position: relative;
+    margin-bottom: 1rem;
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--bg);
+  }
+  .annotated-wrap img {
+    width: 100%;
+    display: block;
+    border-radius: 8px;
+  }
+  .annotated-label {
+    position: absolute;
+    top: .5rem;
+    left: .5rem;
+    background: rgba(0,0,0,.6);
+    color: var(--green);
+    font-size: .7rem;
+    font-weight: 600;
+    padding: .2rem .5rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+  }
+
+  .yolo-stats {
+    display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: .75rem;
+  }
+  .yolo-stat {
+    background: var(--surface2);
+    border-radius: 8px;
+    padding: .6rem 1rem;
+    text-align: center;
+    min-width: 80px;
+  }
+  .yolo-stat .num {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: var(--accent2);
+  }
+  .yolo-stat .lbl {
+    font-size: .7rem;
+    color: var(--text2);
+    margin-top: .15rem;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>YOLLama <span>Dashboard</span></h1>
+  <div class="health-bar" id="healthBar">
+    <div class="health-dot"><span class="dot" id="dotApp"></span> App</div>
+    <div class="health-dot"><span class="dot" id="dotYolo"></span> YOLO</div>
+    <div class="health-dot"><span class="dot" id="dotOllama"></span> Ollama</div>
+  </div>
+</header>
+
+<div class="container">
+  <div class="grid">
+
+    <!-- LEFT COLUMN -->
+    <div>
+      <!-- Upload -->
+      <div class="card" id="uploadCard">
+        <h2>Analyze Image</h2>
+        <div class="drop-zone" id="dropZone">
+          <input type="file" id="fileInput" accept="image/*">
+          <div class="icon">&#128247;</div>
+          <p>Drop an image here or <strong>click to browse</strong></p>
+          <div class="filename" id="fileName"></div>
+          <img class="preview-img" id="previewImg" alt="preview">
+        </div>
+        <div class="controls">
+          <label>Confidence: <strong id="confVal">0.25</strong></label>
+          <input type="range" id="confSlider" min="0.05" max="0.95" step="0.05" value="0.25">
+          <div style="flex:1"></div>
+          <button class="btn btn-primary" id="analyzeBtn" disabled>Analyze</button>
+        </div>
+        <div class="progress-wrap" id="progressWrap">
+          <div class="progress-bar"><div class="fill" id="progressFill"></div></div>
+          <div class="progress-status" id="progressStatus">Uploading...</div>
+        </div>
+      </div>
+
+      <!-- History -->
+      <div class="card" style="margin-top:1.5rem">
+        <h2>History</h2>
+        <ul class="history-list" id="historyList">
+          <li class="empty-state">No results yet</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- RIGHT COLUMN -->
+    <div>
+      <div class="card result-section" id="resultCard">
+        <h2>Analysis Result</h2>
+
+        <div class="meta-row" id="metaRow"></div>
+
+        <!-- Annotated image -->
+        <div class="annotated-wrap" id="annotatedWrap" style="display:none">
+          <span class="annotated-label">YOLO Detections</span>
+          <img id="annotatedImg" alt="Annotated">
+        </div>
+
+        <!-- YOLO stats -->
+        <div class="yolo-stats" id="yoloStats"></div>
+
+        <!-- Summary -->
+        <div class="summary-box" id="summaryBox"></div>
+
+        <!-- Objects table -->
+        <table class="objects-table" id="objectsTable">
+          <thead>
+            <tr><th>Object</th><th>Confidence</th><th>Severity</th></tr>
+          </thead>
+          <tbody id="objectsBody"></tbody>
+        </table>
+
+        <!-- Recommendation -->
+        <div class="recommendation-box" id="recBox"></div>
+
+        <!-- JSON toggle -->
+        <div class="json-toggle" id="jsonToggle">&#9654; Show raw JSON</div>
+        <div class="json-viewer" id="jsonViewer"></div>
+      </div>
+
+      <div class="card result-section" id="placeholderCard" style="display:block">
+        <div class="empty-state">
+          <div style="font-size:3rem;margin-bottom:.5rem">&#129302;</div>
+          <p>Upload an image to start analysis.<br>YOLO detects objects, Ollama interprets.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const dropZone = $('#dropZone');
+const fileInput = $('#fileInput');
+const previewImg = $('#previewImg');
+const analyzeBtn = $('#analyzeBtn');
+const confSlider = $('#confSlider');
+let selectedFile = null;
+
+// Health polling
+async function checkHealth() {
+  try {
+    const r = await fetch('/health');
+    const d = await r.json();
+    $('#dotApp').className = 'dot ' + (d.app === 'ok' ? 'ok' : 'err');
+    $('#dotYolo').className = 'dot ' + (d.yolo === 'ok' ? 'ok' : 'err');
+    $('#dotOllama').className = 'dot ' + (d.ollama === 'ok' ? 'ok' : 'err');
+  } catch {
+    $('#dotApp').className = 'dot err';
+    $('#dotYolo').className = 'dot err';
+    $('#dotOllama').className = 'dot err';
+  }
+}
+checkHealth();
+setInterval(checkHealth, 15000);
+
+// Confidence slider
+confSlider.oninput = () => { $('#confVal').textContent = confSlider.value; };
+
+// File selection
+dropZone.onclick = () => fileInput.click();
+fileInput.onchange = () => { if (fileInput.files[0]) selectFile(fileInput.files[0]); };
+dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add('dragover'); };
+dropZone.ondragleave = () => dropZone.classList.remove('dragover');
+dropZone.ondrop = e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  const f = e.dataTransfer.files[0];
+  if (f && f.type.startsWith('image/')) selectFile(f);
+};
+
+function selectFile(f) {
+  selectedFile = f;
+  $('#fileName').textContent = f.name + ' (' + (f.size / 1024).toFixed(1) + ' KB)';
+  const url = URL.createObjectURL(f);
+  previewImg.src = url;
+  previewImg.style.display = 'block';
+  analyzeBtn.disabled = false;
+}
+
+// Analyze
+analyzeBtn.onclick = async () => {
+  if (!selectedFile) return;
+  analyzeBtn.disabled = true;
+  const pw = $('#progressWrap');
+  const fill = $('#progressFill');
+  const status = $('#progressStatus');
+  pw.classList.add('active');
+  fill.style.width = '15%';
+  status.textContent = 'Sending image to YOLO...';
+
+  const fd = new FormData();
+  fd.append('file', selectedFile);
+
+  try {
+    fill.style.width = '30%';
+    status.textContent = 'YOLO detecting objects...';
+
+    const r = await fetch('/analyze?confidence=' + confSlider.value + '&save=true', {
+      method: 'POST',
+      body: fd
+    });
+
+    fill.style.width = '80%';
+    status.textContent = 'Ollama interpreting...';
+
+    if (!r.ok) {
+      const err = await r.json();
+      throw new Error(err.detail || r.statusText);
+    }
+
+    const data = await r.json();
+    fill.style.width = '100%';
+    status.textContent = 'Done!';
+    setTimeout(() => pw.classList.remove('active'), 1500);
+
+    displayResult(data);
+    loadHistory();
+  } catch (e) {
+    fill.style.width = '100%';
+    fill.style.background = 'var(--red)';
+    status.textContent = 'Error: ' + e.message;
+    setTimeout(() => {
+      pw.classList.remove('active');
+      fill.style.background = '';
+    }, 4000);
+  }
+
+  analyzeBtn.disabled = false;
+};
+
+function displayResult(data) {
+  $('#placeholderCard').style.display = 'none';
+  const rc = $('#resultCard');
+  rc.classList.add('visible');
+
+  // Meta
+  const meta = $('#metaRow');
+  meta.innerHTML = '';
+  const items = [
+    ['&#128196;', data.run_id],
+    ['&#128197;', new Date(data.timestamp).toLocaleString()],
+    ['&#128444;', data.filename]
+  ];
+  items.forEach(([ico, val]) => {
+    const s = document.createElement('span');
+    s.innerHTML = ico + ' ' + escapeHtml(String(val));
+    meta.appendChild(s);
+  });
+
+  // Annotated image overlay
+  const annWrap = $('#annotatedWrap');
+  const annB64 = (data.yolo || {}).annotated_image;
+  if (annB64) {
+    $('#annotatedImg').src = 'data:image/jpeg;base64,' + annB64;
+    annWrap.style.display = 'block';
+  } else {
+    annWrap.style.display = 'none';
+  }
+
+  // YOLO stats
+  const ys = $('#yoloStats');
+  ys.innerHTML = '';
+  const yolo = data.yolo || {};
+  const detCount = yolo.detections_count || 0;
+  const imgSize = yolo.image_size || {};
+  addStat(ys, detCount, 'Detections');
+  if (imgSize.width) addStat(ys, imgSize.width + '×' + imgSize.height, 'Image Size');
+
+  // Summary
+  const analysis = data.analysis || {};
+  $('#summaryBox').textContent = analysis.summary || 'No summary available.';
+
+  // Objects table
+  const tbody = $('#objectsBody');
+  tbody.innerHTML = '';
+  (analysis.objects || []).forEach(obj => {
+    const tr = document.createElement('tr');
+    const conf = typeof obj.confidence === 'number' ? obj.confidence : 0;
+    const pct = (conf * 100).toFixed(0);
+    const sev = (obj.severity || 'unknown').toLowerCase();
+    tr.innerHTML =
+      '<td>' + escapeHtml(obj.name) + '</td>' +
+      '<td>' + pct + '%' +
+        '<div class="conf-bar-wrap"><div class="conf-bar" style="width:' + pct + '%;' +
+        (conf > .7 ? 'background:var(--green)' : conf > .4 ? 'background:var(--yellow)' : 'background:var(--red)') +
+        '"></div></div></td>' +
+      '<td><span class="severity severity-' + sev + '">' + sev + '</span></td>';
+    tbody.appendChild(tr);
+  });
+
+  // Recommendation
+  $('#recBox').textContent = analysis.recommendation || '';
+  $('#recBox').style.display = analysis.recommendation ? 'block' : 'none';
+
+  // JSON viewer
+  $('#jsonViewer').textContent = JSON.stringify(data, null, 2);
+  $('#jsonViewer').classList.remove('open');
+  $('#jsonToggle').innerHTML = '&#9654; Show raw JSON';
+}
+
+$('#jsonToggle').onclick = () => {
+  const v = $('#jsonViewer');
+  const open = v.classList.toggle('open');
+  $('#jsonToggle').innerHTML = open ? '&#9660; Hide raw JSON' : '&#9654; Show raw JSON';
+};
+
+function addStat(parent, value, label) {
+  const d = document.createElement('div');
+  d.className = 'yolo-stat';
+  d.innerHTML = '<div class="num">' + value + '</div><div class="lbl">' + label + '</div>';
+  parent.appendChild(d);
+}
+
+// History
+async function loadHistory() {
+  try {
+    const r = await fetch('/results');
+    const list = await r.json();
+    const ul = $('#historyList');
+    if (!list.length) {
+      ul.innerHTML = '<li class="empty-state">No results yet</li>';
+      return;
+    }
+    ul.innerHTML = '';
+    list.forEach(item => {
+      const li = document.createElement('li');
+      li.innerHTML =
+        '<span class="h-name">' + escapeHtml(item.filename) + '</span>' +
+        '<span class="h-size">' + (item.size / 1024).toFixed(1) + ' KB</span>';
+      li.onclick = () => loadResult(item.filename);
+      ul.appendChild(li);
+    });
+  } catch { /* ignore */ }
+}
+loadHistory();
+
+async function loadResult(filename) {
+  try {
+    const r = await fetch('/results/' + encodeURIComponent(filename));
+    const data = await r.json();
+    displayResult(data);
+  } catch { /* ignore */ }
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.appendChild(document.createTextNode(s));
+  return d.innerHTML;
+}
+</script>
+</body>
+</html>
