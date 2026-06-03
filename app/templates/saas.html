@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YOLLama SaaS - Deterioration Logging</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --surface: #ffffff;
+      --border: #d9dee6;
+      --text: #1f2937;
+      --muted: #667085;
+      --accent: #005a8d;
+      --accent-2: #00a3a3;
+      --danger: #c1121f;
+      --ok: #198754;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #f2f6fb 0%, #eef3f7 100%);
+      color: var(--text);
+    }
+    .topbar {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .brand {
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
+    .brand small {
+      color: var(--muted);
+      font-weight: 500;
+      margin-left: 10px;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      gap: 12px;
+      height: calc(100vh - 56px);
+      padding: 12px;
+    }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .panel h2 {
+      margin: 0;
+      padding: 14px;
+      font-size: 0.95rem;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(90deg, #f8fafc, #f3f9fc);
+    }
+    .section {
+      padding: 12px 14px;
+      border-bottom: 1px dashed var(--border);
+    }
+    .section:last-child { border-bottom: none; }
+
+    label {
+      display: block;
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    input, select {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 10px;
+      margin-bottom: 10px;
+      font-size: 0.9rem;
+    }
+    input[type="range"] { padding: 0; }
+    .btn {
+      width: 100%;
+      border: none;
+      background: var(--accent);
+      color: white;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn.secondary {
+      background: #0f766e;
+    }
+
+    .status {
+      font-size: 0.83rem;
+      margin-top: 8px;
+      color: var(--muted);
+      min-height: 18px;
+    }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--danger); }
+
+    .runs {
+      overflow: auto;
+      flex: 1;
+      min-height: 0;
+    }
+    .run-item {
+      border-bottom: 1px solid var(--border);
+      padding: 10px 12px;
+      cursor: pointer;
+    }
+    .run-item:hover { background: #f7fbff; }
+    .run-item.active { background: #e8f4fd; }
+    .run-title {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.9rem;
+      margin-bottom: 4px;
+    }
+    .run-meta {
+      color: var(--muted);
+      font-size: 0.78rem;
+      line-height: 1.35;
+    }
+
+    .map-wrap {
+      position: relative;
+      height: 100%;
+      width: 100%;
+    }
+    #map {
+      height: 100%;
+      width: 100%;
+    }
+    .map-overlay {
+      position: absolute;
+      z-index: 800;
+      right: 12px;
+      top: 12px;
+      width: 340px;
+      max-height: calc(100% - 24px);
+      overflow: auto;
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(3px);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      box-shadow: 0 10px 24px rgba(0,0,0,0.08);
+      display: none;
+    }
+    .map-overlay.visible { display: block; }
+    .detail-img {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      margin-top: 8px;
+    }
+    .kpi-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .kpi {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+      background: #fbfdff;
+    }
+    .kpi .v { font-weight: 700; font-size: 1rem; }
+    .kpi .k { color: var(--muted); font-size: 0.75rem; }
+
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; height: auto; }
+      .panel { min-height: 460px; }
+      .map-overlay { width: calc(100% - 24px); }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">YOLLama SaaS <small>Binary Deterioration Logging + Geo Map</small></div>
+    <div><a href="/" style="color:#005a8d;text-decoration:none;font-size:0.85rem;">Back to Classic UI</a></div>
+  </div>
+
+  <div class="layout">
+    <div class="panel">
+      <h2>1) Upload Survey Package</h2>
+      <div class="section">
+        <label for="project">Project Name</label>
+        <input id="project" value="Highway Pilot" />
+
+        <label for="runName">Run Name</label>
+        <input id="runName" value="Run " />
+
+        <label for="confidence">YOLO Confidence Threshold: <span id="confVal">0.30</span></label>
+        <input id="confidence" type="range" min="0.05" max="0.95" step="0.01" value="0.30" />
+
+        <label for="package">Upload ZIP (images + Indice de Imagenes.txt)</label>
+        <input id="package" type="file" accept=".zip" />
+
+        <button id="uploadBtn" class="btn">Upload and Process</button>
+        <div id="uploadStatus" class="status"></div>
+      </div>
+
+      <h2>2) Survey Runs</h2>
+      <div class="section">
+        <button id="refreshRuns" class="btn secondary">Refresh Runs</button>
+      </div>
+      <div id="runsList" class="runs"></div>
+    </div>
+
+    <div class="panel map-wrap">
+      <div id="map"></div>
+      <div id="eventPanel" class="map-overlay"></div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script>
+    const map = L.map('map').setView([19.5, -98.5], 10);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    const routeLayer = L.layerGroup().addTo(map);
+    const eventsLayer = L.layerGroup().addTo(map);
+
+    const confInput = document.getElementById('confidence');
+    const confVal = document.getElementById('confVal');
+    confInput.addEventListener('input', () => confVal.textContent = Number(confInput.value).toFixed(2));
+
+    let activeRunId = null;
+
+    function setStatus(msg, kind = '') {
+      const el = document.getElementById('uploadStatus');
+      el.textContent = msg;
+      el.className = 'status ' + kind;
+    }
+
+    async function fetchRuns() {
+      const runsList = document.getElementById('runsList');
+      runsList.innerHTML = '<div class="section" style="border:none;color:#667085;">Loading runs...</div>';
+      const res = await fetch('/saas/runs');
+      const runs = await res.json();
+
+      if (!runs.length) {
+        runsList.innerHTML = '<div class="section" style="border:none;color:#667085;">No runs yet. Upload your first package.</div>';
+        return;
+      }
+
+      runsList.innerHTML = '';
+      for (const run of runs) {
+        const item = document.createElement('div');
+        item.className = 'run-item' + (run.id === activeRunId ? ' active' : '');
+        item.innerHTML = `
+          <div class="run-title">
+            <strong>${run.name}</strong>
+            <span>#${run.id}</span>
+          </div>
+          <div class="run-meta">
+            Project: ${run.project_name}<br>
+            Status: ${run.status} | Images: ${run.total_images} | Events: ${run.positive_events}<br>
+            Created: ${new Date(run.created_at).toLocaleString()}
+          </div>
+        `;
+        item.addEventListener('click', () => loadRunMap(run.id));
+        runsList.appendChild(item);
+      }
+    }
+
+    function renderEventPanel(eventData) {
+      const panel = document.getElementById('eventPanel');
+      panel.classList.add('visible');
+      panel.innerHTML = `
+        <div style="font-weight:700;font-size:0.95rem;">Deterioration Event</div>
+        <div style="font-size:0.83rem;color:#667085;margin-top:4px;">Image: ${eventData.image_name}</div>
+        <div style="font-size:0.83rem;color:#667085;">Timestamp: ${eventData.timestamp || 'N/A'}</div>
+        <div class="kpi-row">
+          <div class="kpi">
+            <div class="v">${Number(eventData.confidence).toFixed(3)}</div>
+            <div class="k">Confidence</div>
+          </div>
+          <div class="kpi">
+            <div class="v">${eventData.detection_count}</div>
+            <div class="k">Detections</div>
+          </div>
+        </div>
+        <div style="font-size:0.82rem;color:#1f2937;margin-top:8px;">
+          Lat: ${eventData.lat.toFixed(6)}<br>
+          Lon: ${eventData.lon.toFixed(6)}
+        </div>
+        <img class="detail-img" src="${eventData.image_url}" alt="event image" />
+      `;
+    }
+
+    async function loadRunMap(runId) {
+      activeRunId = runId;
+      await fetchRuns();
+
+      routeLayer.clearLayers();
+      eventsLayer.clearLayers();
+      document.getElementById('eventPanel').classList.remove('visible');
+
+      const res = await fetch(`/saas/runs/${runId}/map`);
+      if (!res.ok) {
+        alert('Could not load run map data.');
+        return;
+      }
+      const data = await res.json();
+
+      const route = data.route_points || [];
+      const events = data.events || [];
+
+      if (route.length) {
+        const latlngs = route.map(p => [p.lat, p.lon]);
+        const poly = L.polyline(latlngs, { color: '#0ea5e9', weight: 3, opacity: 0.8 });
+        poly.addTo(routeLayer);
+        map.fitBounds(poly.getBounds(), { padding: [20, 20] });
+      }
+
+      for (const ev of events) {
+        const marker = L.circleMarker([ev.lat, ev.lon], {
+          radius: 6,
+          color: '#8b0000',
+          fillColor: '#ef4444',
+          fillOpacity: 0.9,
+          weight: 1
+        });
+        marker.bindTooltip(`Damage event (${ev.confidence.toFixed(2)})`);
+        marker.on('click', () => renderEventPanel(ev));
+        marker.addTo(eventsLayer);
+      }
+    }
+
+    async function uploadPackage() {
+      const btn = document.getElementById('uploadBtn');
+      const project = document.getElementById('project').value.trim();
+      const runName = document.getElementById('runName').value.trim();
+      const confidence = document.getElementById('confidence').value;
+      const file = document.getElementById('package').files[0];
+
+      if (!project || !file) {
+        setStatus('Project and ZIP package are required.', 'err');
+        return;
+      }
+
+      btn.disabled = true;
+      setStatus('Uploading and processing package. This can take time for large surveys...', '');
+
+      const form = new FormData();
+      form.append('package', file);
+
+      const url = `/saas/upload?project_name=${encodeURIComponent(project)}&run_name=${encodeURIComponent(runName || 'Survey Run')}&confidence=${encodeURIComponent(confidence)}`;
+      const res = await fetch(url, { method: 'POST', body: form });
+      const body = await res.json();
+
+      btn.disabled = false;
+
+      if (!res.ok) {
+        setStatus(body.detail || 'Upload failed', 'err');
+        return;
+      }
+
+      setStatus(`Run #${body.run_id} completed. Images: ${body.total_images}, Events: ${body.positive_events}`, 'ok');
+      await fetchRuns();
+      await loadRunMap(body.run_id);
+    }
+
+    document.getElementById('uploadBtn').addEventListener('click', uploadPackage);
+    document.getElementById('refreshRuns').addEventListener('click', fetchRuns);
+
+    fetchRuns();
+  </script>
+</body>
+</html>

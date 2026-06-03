@@ -9,12 +9,15 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 
@@ -36,6 +39,9 @@ OLLAMA_URL = os.getenv("OLLAMA_SERVICE_URL", "http://ollama:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5vl")
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/app/output"))
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+SAAS_UPLOAD_DIR = OUTPUT_DIR / "saas_uploads"
+SAAS_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+SAAS_DB = OUTPUT_DIR / "saas.db"
 
 TIMEOUT = httpx.Timeout(120.0, connect=30.0)
 
@@ -53,6 +59,391 @@ async def preload_ollama():
             logger.info(f"Ollama model preloaded (status {r.status_code})")
         except Exception as e:
             logger.warning(f"Ollama preload failed (will load on first request): {e}")
+
+
+def get_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(SAAS_DB)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_saas_db() -> None:
+    conn = get_db()
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS projects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS survey_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                total_images INTEGER NOT NULL DEFAULT 0,
+                positive_events INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(project_id) REFERENCES projects(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS frames (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL,
+                image_name TEXT NOT NULL,
+                image_path TEXT NOT NULL,
+                image_id TEXT,
+                timestamp TEXT,
+                lat REAL,
+                lon REAL,
+                elevation REAL,
+                has_deterioration INTEGER NOT NULL,
+                confidence REAL NOT NULL,
+                detection_count INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(run_id) REFERENCES survey_runs(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_frames_run_id ON frames(run_id);
+            CREATE INDEX IF NOT EXISTS idx_frames_geo ON frames(lat, lon);
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@app.on_event("startup")
+async def init_saas_on_startup():
+    init_saas_db()
+
+
+def normalize_coord(value: str) -> float | None:
+    """Parse coordinates like '19.592650 N' or '98.574850 W'."""
+    if not value:
+        return None
+    parts = value.strip().split()
+    if not parts:
+        return None
+    try:
+        coord = float(parts[0])
+    except ValueError:
+        return None
+    if len(parts) > 1 and parts[1].upper() in {"S", "W"}:
+        coord *= -1
+    return coord
+
+
+def parse_indice_text(content: str) -> dict[str, dict]:
+    """Parse Indice de Imagenes.txt into image_id keyed metadata."""
+    records: dict[str, dict] = {}
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        fields = [f.strip() for f in line.split("\t")]
+        if len(fields) < 5:
+            continue
+        image_id = fields[0]
+        timestamp = fields[1]
+        lat = normalize_coord(fields[2])
+        lon = normalize_coord(fields[3])
+        elev_raw = fields[4].replace("MSNM", "").strip()
+        try:
+            elevation = float(elev_raw)
+        except ValueError:
+            elevation = None
+        records[image_id] = {
+            "timestamp": timestamp,
+            "lat": lat,
+            "lon": lon,
+            "elevation": elevation,
+        }
+    return records
+
+
+def extract_image_id_from_name(name: str) -> str:
+    stem = Path(name).stem
+    match = re.findall(r"\d{6,}", stem)
+    if match:
+        return match[-1].zfill(10)
+    return stem
+
+
+async def detect_deterioration(image_name: str, image_bytes: bytes, confidence: float) -> tuple[bool, float, int]:
+    """Binary deterioration: positive if any YOLO detection exists above threshold."""
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        response = await client.post(
+            f"{YOLO_URL}/detect",
+            files={"file": (image_name, image_bytes, "image/jpeg")},
+            params={"confidence": confidence},
+        )
+        response.raise_for_status()
+        data = response.json()
+        detections = data.get("detections", [])
+        if not detections:
+            return False, 0.0, 0
+        best_conf = max(float(d.get("confidence", 0.0)) for d in detections)
+        return True, best_conf, len(detections)
+
+
+@app.get("/saas", response_class=HTMLResponse)
+async def saas_gui(request: Request):
+    return templates.TemplateResponse("saas.html", {"request": request})
+
+
+@app.get("/saas/projects")
+async def saas_projects():
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """
+            SELECT p.id, p.name, p.created_at,
+                   COUNT(r.id) AS run_count
+            FROM projects p
+            LEFT JOIN survey_runs r ON r.project_id = p.id
+            GROUP BY p.id
+            ORDER BY p.id DESC
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@app.get("/saas/runs")
+async def saas_runs(project_id: int | None = None):
+    conn = get_db()
+    try:
+        if project_id:
+            rows = conn.execute(
+                """
+                SELECT r.id, r.project_id, p.name AS project_name, r.name, r.status,
+                       r.confidence, r.total_images, r.positive_events, r.created_at
+                FROM survey_runs r
+                JOIN projects p ON p.id = r.project_id
+                WHERE r.project_id = ?
+                ORDER BY r.id DESC
+                """,
+                (project_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT r.id, r.project_id, p.name AS project_name, r.name, r.status,
+                       r.confidence, r.total_images, r.positive_events, r.created_at
+                FROM survey_runs r
+                JOIN projects p ON p.id = r.project_id
+                ORDER BY r.id DESC
+                """
+            ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@app.post("/saas/upload")
+async def saas_upload(
+    project_name: str = Query(..., min_length=2),
+    run_name: str = Query("Survey Run"),
+    confidence: float = Query(0.30, ge=0.0, le=1.0),
+    package: UploadFile = File(...),
+):
+    """Upload ZIP package, run binary deterioration detection, store map-ready events."""
+    if not package.filename or not package.filename.lower().endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Upload must be a .zip package")
+
+    zip_bytes = await package.read()
+    if not zip_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded package is empty")
+
+    created_at = datetime.now(timezone.utc).isoformat()
+    conn = get_db()
+    try:
+        # Find or create project
+        project = conn.execute("SELECT id FROM projects WHERE name = ?", (project_name.strip(),)).fetchone()
+        if project:
+            project_id = int(project["id"])
+        else:
+            cur = conn.execute(
+                "INSERT INTO projects (name, created_at) VALUES (?, ?)",
+                (project_name.strip(), created_at),
+            )
+            project_id = int(cur.lastrowid)
+
+        run_cur = conn.execute(
+            """
+            INSERT INTO survey_runs (project_id, name, status, confidence, total_images, positive_events, created_at)
+            VALUES (?, ?, 'processing', ?, 0, 0, ?)
+            """,
+            (project_id, run_name.strip(), confidence, created_at),
+        )
+        run_id = int(run_cur.lastrowid)
+        conn.commit()
+
+        run_dir = SAAS_UPLOAD_DIR / str(run_id)
+        images_dir = run_dir / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+
+        # Parse package
+        image_files: list[tuple[str, bytes]] = []
+        indice_records: dict[str, dict] = {}
+        exts = {".jpg", ".jpeg", ".png", ".bmp"}
+        with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+            for name in zf.namelist():
+                if name.endswith("/"):
+                    continue
+                p = Path(name)
+                if p.suffix.lower() in exts:
+                    image_files.append((p.name, zf.read(name)))
+                elif p.name.lower() == "indice de imagenes.txt":
+                    indice_text = zf.read(name).decode("utf-8", errors="ignore")
+                    indice_records = parse_indice_text(indice_text)
+
+        if not image_files:
+            conn.execute("UPDATE survey_runs SET status = 'error' WHERE id = ?", (run_id,))
+            conn.commit()
+            raise HTTPException(status_code=400, detail="No images found in zip package")
+
+        total_images = 0
+        positive_events = 0
+        # Process images sequentially for reliability
+        for image_name, image_data in image_files:
+            total_images += 1
+            safe_name = Path(image_name).name
+            frame_path = images_dir / safe_name
+            frame_path.write_bytes(image_data)
+
+            image_id = extract_image_id_from_name(safe_name)
+            gps = indice_records.get(image_id, {})
+
+            has_damage = False
+            best_conf = 0.0
+            det_count = 0
+            try:
+                has_damage, best_conf, det_count = await detect_deterioration(safe_name, image_data, confidence)
+            except Exception as e:
+                logger.warning("YOLO detection failed for %s in run %s: %s", safe_name, run_id, e)
+
+            if has_damage:
+                positive_events += 1
+
+            conn.execute(
+                """
+                INSERT INTO frames (
+                    run_id, image_name, image_path, image_id, timestamp, lat, lon, elevation,
+                    has_deterioration, confidence, detection_count, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    safe_name,
+                    str(frame_path),
+                    image_id,
+                    gps.get("timestamp"),
+                    gps.get("lat"),
+                    gps.get("lon"),
+                    gps.get("elevation"),
+                    1 if has_damage else 0,
+                    best_conf,
+                    det_count,
+                    created_at,
+                ),
+            )
+
+        conn.execute(
+            """
+            UPDATE survey_runs
+            SET status = 'completed', total_images = ?, positive_events = ?
+            WHERE id = ?
+            """,
+            (total_images, positive_events, run_id),
+        )
+        conn.commit()
+
+        return {
+            "run_id": run_id,
+            "project_id": project_id,
+            "status": "completed",
+            "total_images": total_images,
+            "positive_events": positive_events,
+            "message": "Upload processed successfully",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        conn.execute("UPDATE survey_runs SET status = 'error' WHERE id = (SELECT MAX(id) FROM survey_runs)")
+        conn.commit()
+        logger.exception("SaaS upload processing failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Upload processing failed: {e}")
+    finally:
+        conn.close()
+
+
+@app.get("/saas/runs/{run_id}/map")
+async def saas_run_map(run_id: int):
+    """Return map points and deterioration events for a specific run."""
+    conn = get_db()
+    try:
+        run = conn.execute(
+            "SELECT id, project_id, name, status, total_images, positive_events, created_at FROM survey_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        frames = conn.execute(
+            """
+            SELECT id, image_name, image_path, image_id, timestamp, lat, lon, elevation,
+                   has_deterioration, confidence, detection_count
+            FROM frames
+            WHERE run_id = ?
+            ORDER BY id ASC
+            """,
+            (run_id,),
+        ).fetchall()
+
+        route_points = []
+        events = []
+        for fr in frames:
+            lat = fr["lat"]
+            lon = fr["lon"]
+            if lat is not None and lon is not None:
+                route_points.append({"lat": lat, "lon": lon, "image_id": fr["image_id"]})
+                if fr["has_deterioration"] == 1:
+                    events.append(
+                        {
+                            "frame_id": fr["id"],
+                            "image_name": fr["image_name"],
+                            "image_id": fr["image_id"],
+                            "lat": lat,
+                            "lon": lon,
+                            "timestamp": fr["timestamp"],
+                            "confidence": fr["confidence"],
+                            "detection_count": fr["detection_count"],
+                            "image_url": f"/saas/runs/{run_id}/image/{fr['image_name']}",
+                        }
+                    )
+
+        return {
+            "run": dict(run),
+            "route_points": route_points,
+            "events": events,
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/saas/runs/{run_id}/image/{image_name}")
+async def saas_run_image(run_id: int, image_name: str):
+    safe_name = Path(image_name).name
+    image_path = SAAS_UPLOAD_DIR / str(run_id) / "images" / safe_name
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="Image not found")
+    return FileResponse(path=image_path)
 
 
 def build_prompt(detections: list[dict], filename: str) -> str:

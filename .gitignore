@@ -22,3 +22,6 @@ image-sorter/test_clip.py
 
 # Build logs
 build.log
+
+# Local safety snapshots
+snapshots/
